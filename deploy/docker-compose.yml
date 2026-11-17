@@ -1,0 +1,128 @@
+# EduZone — dựng trên máy cá nhân.
+# Chạy từ thư mục gốc repo:  docker compose -f deploy/docker-compose.yml up -d --build
+name: eduzone
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  mem_limit: 512m
+  networks: [backend]
+
+x-db-env: &db-env
+  DB_HOST: postgres
+  DB_PORT: "5432"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_admin}
+      COURSE_DB_PASSWORD: ${COURSE_DB_PASSWORD:-course_pass}
+      STUDENT_DB_PASSWORD: ${STUDENT_DB_PASSWORD:-student_pass}
+      ENROLLMENT_DB_PASSWORD: ${ENROLLMENT_DB_PASSWORD:-enrollment_pass}
+      ACCESS_DB_PASSWORD: ${ACCESS_DB_PASSWORD:-access_pass}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1: chỉ báo sẵn sàng khi server thật đã lên (không tính server tạm lúc chạy init)
+      test: ["CMD-SHELL", "pg_isready -U postgres -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [backend]
+
+  course-service:
+    <<: *service-defaults
+    build: ../services/course-service
+    image: eduzone/course-service:local
+    environment:
+      <<: *db-env
+      DB_NAME: eduzone_course_db
+      DB_USER: course_user
+      DB_PASSWORD: ${COURSE_DB_PASSWORD:-course_pass}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck: &app-health
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+      retries: 10
+
+  student-service:
+    <<: *service-defaults
+    build: ../services/student-service
+    image: eduzone/student-service:local
+    environment:
+      <<: *db-env
+      DB_NAME: eduzone_student_db
+      DB_USER: student_user
+      DB_PASSWORD: ${STUDENT_DB_PASSWORD:-student_pass}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *app-health
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q UP"]
+
+  enrollment-service:
+    <<: *service-defaults
+    build: ../services/enrollment-service
+    image: eduzone/enrollment-service:local
+    environment:
+      <<: *db-env
+      DB_NAME: eduzone_enrollment_db
+      DB_USER: enrollment_user
+      DB_PASSWORD: ${ENROLLMENT_DB_PASSWORD:-enrollment_pass}
+      COURSE_SERVICE_URL: http://course-service:8081
+      STUDENT_SERVICE_URL: http://student-service:8082
+      ACCESS_SERVICE_URL: http://access-service:8084
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *app-health
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health | grep -q UP"]
+
+  access-service:
+    <<: *service-defaults
+    build: ../services/access-service
+    image: eduzone/access-service:local
+    environment:
+      <<: *db-env
+      DB_NAME: eduzone_access_db
+      DB_USER: access_user
+      DB_PASSWORD: ${ACCESS_DB_PASSWORD:-access_pass}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      <<: *app-health
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q UP"]
+
+  gateway:
+    <<: *service-defaults
+    build: ../services/gateway
+    image: eduzone/gateway:local
+    environment:
+      COURSE_SERVICE_URL: http://course-service:8081
+      STUDENT_SERVICE_URL: http://student-service:8082
+      ENROLLMENT_SERVICE_URL: http://enrollment-service:8083
+      ACCESS_SERVICE_URL: http://access-service:8084
+    # Chỉ gateway mở cổng ra máy host; các service khác chỉ nằm trong mạng nội bộ.
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      course-service: { condition: service_healthy }
+      student-service: { condition: service_healthy }
+      enrollment-service: { condition: service_healthy }
+      access-service: { condition: service_healthy }
+    healthcheck:
+      <<: *app-health
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+
+networks:
+  backend:
+    name: eduzone_backend
+
+volumes:
+  pgdata:

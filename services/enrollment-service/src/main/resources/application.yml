@@ -1,0 +1,40 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: enrollment-service
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:eduzone_enrollment_db}
+    username: ${DB_USER:enrollment_user}
+    password: ${DB_PASSWORD:enrollment_pass}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+  mvc:
+    problemdetails:
+      enabled: true
+
+eduzone:
+  services:
+    course-url: ${COURSE_SERVICE_URL:http://localhost:8081}
+    student-url: ${STUDENT_SERVICE_URL:http://localhost:8082}
+    access-url: ${ACCESS_SERVICE_URL:http://localhost:8084}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+
+logging:
+  level:
+    # Ẩn các dòng WARN vô hại của Hibernate lúc tạo bảng, tránh nhiễu khi lọc log theo mức WARN.
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: ERROR
