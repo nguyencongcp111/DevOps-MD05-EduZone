@@ -74,8 +74,43 @@ Dữ liệu mẫu tự tạo khi khởi động: khoá `DEVOPS-101`, `SPRING-201
 | `ENROLLMENT_DB_PASSWORD` | `enrollment_pass` | Mật khẩu `enrollment_user` |
 | `ACCESS_DB_PASSWORD` | `access_pass` | Mật khẩu `access_user` |
 | `GATEWAY_PORT` | `8080` | Cổng gateway mở ra máy host |
+| `GHCR_OWNER` | — | _(chỉ máy chủ)_ Chủ sở hữu image trên ghcr.io, chữ thường |
+| `IMAGE_TAG` | — | _(chỉ máy chủ)_ Tag image cần chạy = 7 ký tự đầu commit; `deploy.sh` tự điền |
+| `GATEWAY_BIND` | `0.0.0.0` | _(chỉ máy chủ)_ Địa chỉ gateway lắng nghe; đổi `127.0.0.1` khi có Nginx |
+
+Trên máy chủ các biến nằm trong `~/eduzone/.env` (mẫu: `deploy/.env.prod.example`), mật khẩu **bắt buộc** phải đặt.
 
 Biến bên trong từng service (Compose tự gán): `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, và với enrollment-service/gateway thêm `COURSE_SERVICE_URL`, `STUDENT_SERVICE_URL`, `ENROLLMENT_SERVICE_URL`, `ACCESS_SERVICE_URL`.
+
+## CI/CD — GitHub Actions
+
+Workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+
+| Job | Khi nào chạy | Việc làm |
+|---|---|---|
+| `test` (5 job song song) | Mọi push và pull request vào `main` | `mvn verify`: build và chạy unit test từng service |
+| `image` (5 job song song) | Chỉ khi push lên `main` và `test` đã xanh | Build image, đẩy lên `ghcr.io/<owner>/eduzone-<service>` với tag **7 ký tự đầu của commit** và `latest` |
+
+## Triển khai lên máy chủ
+
+Máy chủ: Ubuntu 24.04. Hệ thống chạy bằng image **kéo từ ghcr.io**, không build trên máy chủ.
+
+**1. Khởi tạo máy chủ (một lần):** tạo người dùng quản trị `eduadmin`, chỉ cho đăng nhập bằng khoá, cài Docker.
+
+```bash
+ssh -i <khoa.pem> ubuntu@<IP> 'sudo bash -s -- eduadmin' < scripts/server-bootstrap.sh
+```
+
+**2. Triển khai một commit đã qua CI:**
+
+```bash
+cp deploy/.env.prod.example deploy/.env.prod   # rồi đổi mật khẩu
+SSH_KEY=<khoa.pem> bash scripts/deploy.sh eduadmin@<IP>
+```
+
+Script chép `docker-compose.prod.yml`, script tạo database và `.env` lên `~/eduzone`, ghi `IMAGE_TAG` = commit hiện tại, rồi `docker compose pull && up -d`.
+
+**Quay lui phiên bản:** `bash scripts/deploy.sh eduadmin@<IP> <tag-cũ>`.
 
 ## Địa chỉ công khai
 

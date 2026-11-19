@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Huỷ lần chạy cũ khi có lần đẩy mới trên cùng nhánh.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Build + test từng service (chạy cho cả push và pull request)
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [gateway, course-service, student-service, enrollment-service, access-service]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: services/${{ matrix.service }}/pom.xml
+
+      - name: Build và chạy test
+        run: mvn -B verify
+
+      - name: Tóm tắt kết quả test
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.service }}"
+            for f in target/surefire-reports/TEST-*.xml; do
+              [ -f "$f" ] || continue
+              grep -o 'testsuite [^>]*' "$f" | sed -E 's/.*name="([^"]+)".*tests="([0-9]+)".*failures="([0-9]+)".*/- \1: \2 test, \3 lỗi/'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # 2. Dựng image và đẩy lên ghcr.io — chỉ khi đẩy mã lên main và test đã xanh
+  # ---------------------------------------------------------------------------
+  image:
+    name: Image ${{ matrix.service }}
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [gateway, course-service, student-service, enrollment-service, access-service]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tính tag và tên image
+        id: meta
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"            # ghcr yêu cầu chữ thường
+          echo "sha7=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/eduzone-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build và push
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha7 }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Ghi tag vào tóm tắt
+        run: echo "- \`${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha7 }}\`" >> "$GITHUB_STEP_SUMMARY"
