@@ -1,0 +1,248 @@
+{
+  "uid": "eduzone-ops",
+  "title": "EduZone — Vận hành",
+  "description": "Dashboard vận hành của nhóm EduZone (biến thể 5 — Khoá học trực tuyến)",
+  "tags": ["eduzone"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Dashboard này trả lời câu hỏi gì?",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 5 },
+      "options": {
+        "mode": "markdown",
+        "content": "| Biểu đồ | Loại số đo | Câu hỏi vận hành |\n|---|---|---|\n| Lưu lượng request | **counter** (`rate`) | Service nào đang nhận nhiều tải nhất? Lưu lượng có bất thường không? |\n| Ghi danh theo kết quả | **counter** nghiệp vụ | Bao nhiêu ghi danh thành công / bị huỷ, và huỷ vì lý do gì? |\n| Tỉ lệ lỗi HTTP | **counter** (tỉ lệ) | Service nào đang trả lỗi cho client? |\n| Độ trễ p95 | **histogram** | 95% request được trả lời trong bao lâu? Service nào chậm? |\n| JVM heap | **gauge** | Service nào sắp hết bộ nhớ (giới hạn container 512 MB)? |\n| Kết nối DB | **gauge** | Pool kết nối Postgres có bị cạn không? |\n| CPU / RAM / đĩa máy chủ | **gauge** (node-exporter) | Máy chủ còn đủ tài nguyên cho cả ứng dụng, giám sát và log không? |"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Service đang UP",
+      "description": "Có đủ 5 thành phần (4 service + gateway) đang trả lời Prometheus không? Nhỏ hơn 5 là có thành phần chết.",
+      "gridPos": { "x": 0, "y": 5, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(up{job=~\"eduzone-services|gateway\"})", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "red", "value": null },
+            { "color": "green", "value": 5 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Ghi danh thành công (1 giờ)",
+      "description": "Có bao nhiêu ghi danh kết thúc CONFIRMED trong 1 giờ qua? Dùng counter eduzone_enrollments_total.",
+      "gridPos": { "x": 6, "y": 5, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(eduzone_enrollments_total{status=\"confirmed\"}[1h])) or vector(0)", "instant": true }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Ghi danh bị huỷ (1 giờ)",
+      "description": "Có bao nhiêu ghi danh kết thúc CANCELLED trong 1 giờ qua? Số này tăng khi lớp bị khoá (đủ sĩ số) — API vẫn trả 200 nên tỉ lệ lỗi HTTP không phát hiện được.",
+      "gridPos": { "x": 12, "y": 5, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(eduzone_enrollments_total{status=\"cancelled\"}[1h])) or vector(0)", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Độ trễ p95 toàn hệ thống",
+      "description": "95% request qua gateway được trả lời trong bao lâu (5 phút gần nhất)?",
+      "gridPos": { "x": 18, "y": 5, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{service=\"gateway\", uri!~\"/actuator.*\"}[5m])))", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 3,
+          "noValue": "chưa có request",
+          "mappings": [ { "type": "special", "options": { "match": "nan", "result": { "text": "chưa có request" } } } ],
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "orange", "value": 0.5 },
+            { "color": "red", "value": 1 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Lưu lượng request theo service (req/s)",
+      "description": "COUNTER — rate(http_server_requests_seconds_count). Service nào đang nhận nhiều tải nhất, lưu lượng có tăng đột biến không?",
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service) (rate(http_server_requests_seconds_count{uri!~\"/actuator.*\"}[1m]))", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Ghi danh mỗi phút theo kết quả",
+      "description": "COUNTER nghiệp vụ — eduzone_enrollments_total{status, reason}. Bao nhiêu ghi danh thành công / bị huỷ mỗi phút, và huỷ vì lý do gì (class_full, no_seat, payment_failed...)?",
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status, reason) (rate(eduzone_enrollments_total[2m])) * 60", "legendFormat": "{{status}} ({{reason}})" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "decimals": 1, "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Độ trễ p95 theo service",
+      "description": "HISTOGRAM — histogram_quantile(0.95, http_server_requests_seconds_bucket). 95% request của mỗi service được trả lời trong bao lâu? enrollment-service luôn chậm hơn vì phải gọi 3 service khác.",
+      "gridPos": { "x": 0, "y": 17, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, service) (rate(http_server_requests_seconds_bucket{uri!~\"/actuator.*\"}[5m])))", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 0 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tỉ lệ lỗi HTTP theo service",
+      "description": "COUNTER (tỉ lệ) — phần trăm request trả 4xx/5xx. Service nào đang trả lỗi cho client? Lưu ý: ghi danh bị huỷ vẫn trả 200 nên KHÔNG xuất hiện ở đây — xem biểu đồ ghi danh.",
+      "gridPos": { "x": 12, "y": 17, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service) (rate(http_server_requests_seconds_count{status=~\"[45]..\", uri!~\"/actuator.*\"}[5m])) / sum by (service) (rate(http_server_requests_seconds_count{uri!~\"/actuator.*\"}[5m]))", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Bộ nhớ heap JVM theo service",
+      "description": "GAUGE — jvm_memory_used_bytes{area=\"heap\"}. Giá trị tức thời, lên xuống theo GC. Service nào đang tiến sát giới hạn container 512 MB?",
+      "gridPos": { "x": 0, "y": 25, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service) (jvm_memory_used_bytes{area=\"heap\"})", "legendFormat": "{{service}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull", "max"] } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Kết nối Postgres đang dùng",
+      "description": "GAUGE — hikaricp_connections_active / hikaricp_connections_max. Pool kết nối database của mỗi service có bị cạn không (mặc định tối đa 10)?",
+      "gridPos": { "x": 12, "y": 25, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service) (hikaricp_connections_active)", "legendFormat": "{{service}} đang dùng" },
+        { "refId": "B", "expr": "max(hikaricp_connections_max)", "legendFormat": "tối đa mỗi service" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "none", "decimals": 0, "min": 0, "custom": { "fillOpacity": 0 } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "tối đa mỗi service" }, "properties": [
+            { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } },
+            { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+          ] }
+        ]
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "CPU máy chủ (%)",
+      "description": "Tài nguyên máy chủ — node-exporter: 100 - % thời gian CPU nhàn rỗi. Máy chủ có đang quá tải CPU không?",
+      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])))", "legendFormat": "CPU đang dùng" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "fillOpacity": 20, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 85 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "RAM và đĩa máy chủ (%)",
+      "description": "Tài nguyên máy chủ — node-exporter (GAUGE). Còn đủ RAM cho Elasticsearch ở ngày 4 không? Đĩa có sắp đầy vì log/image không?",
+      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "legendFormat": "RAM đang dùng" },
+        { "refId": "B", "expr": "100 * (1 - node_filesystem_avail_bytes{mountpoint=\"/\", fstype!=\"rootfs\"} / node_filesystem_size_bytes{mountpoint=\"/\", fstype!=\"rootfs\"})", "legendFormat": "Đĩa / đang dùng" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "custom": { "fillOpacity": 10, "thresholdsStyle": { "mode": "line" } },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null },
+            { "color": "red", "value": 90 }
+          ] }
+        },
+        "overrides": []
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

@@ -39,6 +39,18 @@ jobs:
           cache: maven
           cache-dependency-path: services/${{ matrix.service }}/pom.xml
 
+      # Maven Central đôi khi trả lỗi tạm thời trên runner; thử lại tối đa 3 lần.
+      # -U ở lần thử lại để Maven không nhớ kết quả "không tìm thấy" của lần trước.
+      - name: Tải thư viện
+        run: |
+          for i in 1 2 3; do
+            if [ "$i" -eq 1 ]; then flags=""; else flags="-U"; fi
+            mvn -B -q $flags dependency:go-offline && exit 0
+            echo "::warning::Tải thư viện lỗi lần $i, thử lại sau 15 giây"
+            sleep 15
+          done
+          exit 1
+
       - name: Build và chạy test
         run: mvn -B verify
 

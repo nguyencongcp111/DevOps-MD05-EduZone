@@ -1,5 +1,6 @@
 package com.eduzone.enrollment;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -26,6 +27,7 @@ class EnrollmentServiceTest {
 
     private MockRestServiceServer server;
     private EnrollmentService service;
+    private SimpleMeterRegistry meters;
 
     @BeforeEach
     void setUp() {
@@ -33,7 +35,13 @@ class EnrollmentServiceTest {
         server = MockRestServiceServer.bindTo(builder).build();
         EnrollmentRepository repo = mock(EnrollmentRepository.class);
         when(repo.save(any(Enrollment.class))).thenAnswer(inv -> inv.getArgument(0));
-        service = new EnrollmentService(repo, builder, "http://course", "http://student", "http://access");
+        meters = new SimpleMeterRegistry();
+        service = new EnrollmentService(repo, meters, builder, "http://course", "http://student", "http://access");
+    }
+
+    private double counted(String status, String reason) {
+        var c = meters.find("eduzone.enrollments").tags("status", status, "reason", reason).counter();
+        return c == null ? 0 : c.count();
     }
 
     @Test
@@ -51,6 +59,7 @@ class EnrollmentServiceTest {
 
         assertThat(e.getStatus()).isEqualTo(Enrollment.Status.CONFIRMED);
         assertThat(e.getAmount()).isEqualTo(1_500_000L);
+        assertThat(counted("confirmed", "none")).isEqualTo(1);
         server.verify();
     }
 
@@ -75,6 +84,7 @@ class EnrollmentServiceTest {
 
         assertThat(e.getStatus()).isEqualTo(Enrollment.Status.CANCELLED);
         assertThat(e.getReason()).isEqualTo("Lớp DEVOPS-101 đã đủ sĩ số");
+        assertThat(counted("cancelled", "class_full")).isEqualTo(1);
         server.verify();
     }
 

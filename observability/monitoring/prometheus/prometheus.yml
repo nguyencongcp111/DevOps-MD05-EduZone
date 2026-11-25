@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # Bốn service nghiệp vụ — đề yêu cầu cả bốn ở trạng thái UP
+  - job_name: eduzone-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - course-service:8081
+          - student-service:8082
+          - enrollment-service:8083
+          - access-service:8084
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  - job_name: gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [gateway:8080]
+    relabel_configs:
+      - target_label: service
+        replacement: gateway
+
+  # Tài nguyên máy chủ (CPU, RAM, đĩa)
+  - job_name: node
+    static_configs:
+      - targets: [node-exporter:9100]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]

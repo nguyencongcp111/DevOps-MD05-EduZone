@@ -16,10 +16,11 @@ SSH_OPTS=(-o StrictHostKeyChecking=accept-new)
 [ -f "$ENV_FILE" ] || { echo "Thiếu $ENV_FILE (sao chép từ deploy/.env.prod.example)"; exit 1; }
 
 echo ">> Triển khai tag $TAG lên $TARGET"
-ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p ~/eduzone/postgres/init"
+ssh "${SSH_OPTS[@]}" "$TARGET" "mkdir -p ~/eduzone/postgres/init && rm -rf ~/eduzone/monitoring"
 scp "${SSH_OPTS[@]}" deploy/docker-compose.prod.yml "$TARGET:eduzone/docker-compose.yml"
 scp "${SSH_OPTS[@]}" deploy/postgres/init/01-create-databases.sh "$TARGET:eduzone/postgres/init/"
 scp "${SSH_OPTS[@]}" "$ENV_FILE" "$TARGET:eduzone/.env"
+scp "${SSH_OPTS[@]}" -r observability/monitoring "$TARGET:eduzone/monitoring"
 
 ssh "${SSH_OPTS[@]}" "$TARGET" bash -s -- "$TAG" <<'REMOTE'
 set -euo pipefail
@@ -30,4 +31,10 @@ if grep -q '^IMAGE_TAG=' .env; then sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$TAG/" .en
 docker compose pull
 docker compose up -d --wait --wait-timeout 300
 docker compose ps --format 'table {{.Name}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+
+echo ">> Cụm giám sát"
+docker compose --env-file .env -f monitoring/docker-compose.yml up -d --remove-orphans
+# Nạp lại cấu hình Prometheus nếu file đổi mà container không tạo lại
+curl -s -X POST http://127.0.0.1:9090/-/reload >/dev/null || true
+docker compose --env-file .env -f monitoring/docker-compose.yml ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
 REMOTE

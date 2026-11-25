@@ -76,7 +76,9 @@ Dữ liệu mẫu tự tạo khi khởi động: khoá `DEVOPS-101`, `SPRING-201
 | `GATEWAY_PORT` | `8080` | Cổng gateway mở ra máy host |
 | `GHCR_OWNER` | — | _(chỉ máy chủ)_ Chủ sở hữu image trên ghcr.io, chữ thường |
 | `IMAGE_TAG` | — | _(chỉ máy chủ)_ Tag image cần chạy = 7 ký tự đầu commit; `deploy.sh` tự điền |
-| `GATEWAY_BIND` | `0.0.0.0` | _(chỉ máy chủ)_ Địa chỉ gateway lắng nghe; đổi `127.0.0.1` khi có Nginx |
+| `GATEWAY_BIND` | `127.0.0.1` | _(chỉ máy chủ)_ Địa chỉ gateway lắng nghe; `127.0.0.1` = chỉ Nginx gọi được |
+| `GRAFANA_ADMIN_PASSWORD` | `admin_local` | Mật khẩu tài khoản `admin` của Grafana (máy chủ: bắt buộc đổi) |
+| `GRAFANA_ROOT_URL` | `http://localhost:3000/grafana/` | Địa chỉ công khai của Grafana (máy chủ: `https://nptc.io.vn/grafana/`) |
 
 Trên máy chủ các biến nằm trong `~/eduzone/.env` (mẫu: `deploy/.env.prod.example`), mật khẩu **bắt buộc** phải đặt.
 
@@ -112,9 +114,69 @@ Script chép `docker-compose.prod.yml`, script tạo database và `.env` lên `~
 
 **Quay lui phiên bản:** `bash scripts/deploy.sh eduadmin@<IP> <tag-cũ>`.
 
+`deploy.sh` cũng chép và dựng luôn cụm giám sát (`observability/monitoring`) vào `~/eduzone/monitoring`.
+
+**3. Nginx + HTTPS (một lần, sau khi tên miền đã trỏ về máy chủ):**
+
+```bash
+SSH_KEY=<khoa.pem> bash scripts/setup-https.sh eduadmin@<IP> nptc.io.vn <email>
+```
+
+Script cài Nginx và certbot trên máy chủ, xin chứng chỉ Let's Encrypt (xác minh qua `/.well-known/acme-challenge/`), cài [`deploy/nginx/eduzone.conf`](deploy/nginx/eduzone.conf) và bật tự gia hạn (`certbot.timer` + nạp lại Nginx sau khi gia hạn).
+
+## Che chắn mạng
+
+| Thành phần | Lắng nghe | Từ Internet |
+|---|---|---|
+| Nginx | `0.0.0.0:80`, `0.0.0.0:443` | ✅ Cổng duy nhất mở |
+| gateway | `127.0.0.1:8080` (`GATEWAY_BIND=127.0.0.1`) | ❌ chỉ qua Nginx `/api/` |
+| Grafana | `127.0.0.1:3000` | ❌ chỉ qua Nginx `/grafana/` |
+| Prometheus | `127.0.0.1:9090` | ❌ xem qua đường hầm SSH |
+| 4 service, Postgres, node-exporter | chỉ mạng Docker `eduzone_backend` | ❌ |
+
+Docker ghi luật iptables riêng nên **ufw không chặn được cổng Docker đã publish** — vì vậy các cổng được gắn vào `127.0.0.1` ngay trong Compose, cộng với Security Group của EC2 chỉ mở 22, 80, 443.
+
+Kiểm tra từ máy khác (chỉ thấy 22, 80, 443):
+
+```bash
+nmap -Pn -p 22,80,443,3000,5432,8080,8081-8084,9090,9100 nptc.io.vn
+```
+
+## Giám sát — Prometheus + Grafana
+
+- **Prometheus** thu `/actuator/prometheus` của 4 service + gateway (job `eduzone-services`, `gateway`) và `node-exporter` (tài nguyên máy chủ). Luật cảnh báo trong [`alerts.yml`](observability/monitoring/prometheus/alerts.yml): service chết, tỉ lệ lỗi 5xx > 5%, tỉ lệ ghi danh bị huỷ > 50%.
+- **Grafana** tự nạp datasource và dashboard **EduZone — Vận hành** khi khởi động; xem **không cần đăng nhập** (Viewer ẩn danh), sửa cần tài khoản admin.
+- Số đo nghiệp vụ riêng: `eduzone_enrollments_total{status, reason}` (counter) do enrollment-service ghi — phát hiện được ghi danh bị huỷ dù API vẫn trả `HTTP 200`.
+
+| Biểu đồ | Loại số đo | Câu hỏi vận hành |
+|---|---|---|
+| Lưu lượng request theo service | counter (`rate`) | Service nào nhận nhiều tải nhất? Có tăng đột biến không? |
+| Ghi danh mỗi phút theo kết quả | counter nghiệp vụ | Bao nhiêu ghi danh thành công / bị huỷ, huỷ vì lý do gì? |
+| Tỉ lệ lỗi HTTP theo service | counter (tỉ lệ) | Service nào đang trả lỗi cho client? |
+| Độ trễ p95 theo service | histogram | 95% request được trả lời trong bao lâu? Service nào chậm? |
+| Bộ nhớ heap JVM | gauge | Service nào sắp chạm giới hạn 512 MB? |
+| Kết nối Postgres đang dùng | gauge | Pool kết nối database có bị cạn không? |
+| CPU máy chủ | gauge (node-exporter) | Máy chủ có quá tải CPU không? |
+| RAM và đĩa máy chủ | gauge (node-exporter) | Còn đủ RAM/đĩa cho ứng dụng, giám sát và log không? |
+
+Chạy trên máy cá nhân (sau khi ứng dụng đã lên):
+
+```bash
+docker compose -f observability/monitoring/docker-compose.yml up -d
+```
+
+Grafana: <http://localhost:3000/grafana/> · Prometheus: <http://localhost:9090/targets>
+
+Trên máy chủ, xem trang Targets qua đường hầm SSH rồi mở <http://localhost:9090/targets>:
+
+```bash
+ssh -i <khoa.pem> -L 9090:127.0.0.1:9090 eduadmin@<IP>
+```
+
 ## Địa chỉ công khai
 
-_Cập nhật ở ngày 3: `https://<tên-miền>`_
+- API: <https://nptc.io.vn/api/courses>
+- Dashboard: <https://nptc.io.vn/grafana/>
 
 ## Phân công công việc
 

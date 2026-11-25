@@ -1,5 +1,7 @@
 package com.eduzone.enrollment;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,16 +28,25 @@ public class EnrollmentService {
     private static final Logger log = LoggerFactory.getLogger(EnrollmentService.class);
 
     private final EnrollmentRepository repo;
+    private final MeterRegistry meters;
     private final RestClient courseClient;
     private final RestClient studentClient;
     private final RestClient accessClient;
 
     public EnrollmentService(EnrollmentRepository repo,
+                             MeterRegistry meters,
                              RestClient.Builder builder,
                              @Value("${eduzone.services.course-url}") String courseUrl,
                              @Value("${eduzone.services.student-url}") String studentUrl,
                              @Value("${eduzone.services.access-url}") String accessUrl) {
         this.repo = repo;
+        this.meters = meters;
+        // Đăng ký sẵn mọi tổ hợp nhãn với giá trị 0: nếu counter chỉ xuất hiện ở lần tăng đầu tiên,
+        // Prometheus không có mẫu 0 ban đầu và increase()/rate() sẽ bỏ sót các ghi danh đầu tiên.
+        count0("confirmed", "none");
+        for (String reason : new String[] {"no_seat", "payment_failed", "class_full", "access_error"}) {
+            count0("cancelled", reason);
+        }
         this.courseClient = builder.clone().baseUrl(courseUrl).build();
         this.studentClient = builder.clone().baseUrl(studentUrl).build();
         this.accessClient = builder.clone().baseUrl(accessUrl).build();
@@ -62,7 +73,7 @@ public class EnrollmentService {
         } catch (RestClientException ex) {
             log.warn("Bước 2: không giữ được suất khoá {} cho ghi danh {}: {}",
                     e.getCourseCode(), e.getId(), detail(ex), ex);
-            return cancel(e, "Không giữ được suất: " + detail(ex));
+            return cancel(e, "Không giữ được suất: " + detail(ex), "no_seat");
         }
         e.setAmount(course.fee());
         e = repo.save(e);
@@ -79,7 +90,7 @@ public class EnrollmentService {
             log.warn("Bước 3: không trừ được học phí của học viên {} cho ghi danh {}: {}",
                     e.getStudentId(), e.getId(), detail(ex), ex);
             releaseSeat(e);
-            return cancel(e, "Không trừ được học phí: " + detail(ex));
+            return cancel(e, "Không trừ được học phí: " + detail(ex), "payment_failed");
         }
         log.info("Bước 3: đã trừ {} VND của học viên {}", e.getAmount(), e.getStudentId());
 
@@ -94,18 +105,28 @@ public class EnrollmentService {
             // HẬU QUẢ: access-service đã từ chối; ghi WARN kèm ngoại lệ của lời gọi liên service.
             log.warn("Bước 4: access-service từ chối cấp quyền cho ghi danh {}: {}", e.getId(), detail(ex), ex);
             compensate(e);
-            return cancel(e, detail(ex));
+            return cancel(e, detail(ex), "class_full");
         } catch (RestClientException ex) {
             log.error("Bước 4: lỗi khi gọi access-service cho ghi danh {}: {}", e.getId(), detail(ex), ex);
             compensate(e);
-            return cancel(e, "Không cấp được quyền vào lớp: " + detail(ex));
+            return cancel(e, "Không cấp được quyền vào lớp: " + detail(ex), "access_error");
         }
 
         // Bước 6: kết thúc thành công
         e.confirm();
         e = repo.save(e);
+        count("confirmed", "none");
         log.info("Bước 6: ghi danh {} hoàn tất, trạng thái CONFIRMED", e.getId());
         return e;
+    }
+
+    /** Số đo nghiệp vụ: eduzone_enrollments_total{status, reason} — loại đếm luỹ kế (counter). */
+    private void count(String status, String reason) {
+        count0(status, reason).increment();
+    }
+
+    private Counter count0(String status, String reason) {
+        return meters.counter("eduzone.enrollments", "status", status, "reason", reason);
     }
 
     /** Bước 5: hoàn tiền rồi trả lại suất (ngược thứ tự bước 3, 2). */
@@ -137,9 +158,10 @@ public class EnrollmentService {
         }
     }
 
-    private Enrollment cancel(Enrollment e, String reason) {
+    private Enrollment cancel(Enrollment e, String reason, String reasonCode) {
         e.cancel(reason);
         Enrollment saved = repo.save(e);
+        count("cancelled", reasonCode);
         log.info("Bước 6: ghi danh {} kết thúc, trạng thái CANCELLED: {}", saved.getId(), reason);
         return saved;
     }
